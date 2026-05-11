@@ -9,5 +9,6 @@ on 'test' => sub {
 	requires 'URI::Escape', '3.31';
     requires 'LWP', '6.28';
 	requires 'LWP::Protocol::https','6.07';
+	requires 'Marlin', '0.023001';
 };
 
