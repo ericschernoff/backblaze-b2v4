@@ -21,31 +21,31 @@ use Marlin::Util -all;
 use Marlin
 	'application_key_id' => { is => 'ro', isa => 'NonEmptyStr' },
 	'application_key' => { is => 'ro', isa => 'NonEmptyStr' },
-	'current_status_not_ok' => { is => 'rw', isa => 'Bool', default => 0 },
-	'b2_login_error' => { is => 'rw', isa => 'Bool', default => 0 },
+	'current_status_is_not_ok' => { is => 'rw', isa => 'Bool', default => 0 },
+	'login_error' => { is => 'rw', isa => 'Bool', default => 0 },
 	'errors' => { is => 'rw', isa => 'ArrayRef', default => [] },
-	'api_info' => { is => 'ro', isa => 'HashRef', builder => '_api_setup' },
+	'api_info' => { is => 'rw', isa => 'HashRef', builder => 'build_api_info' },
 	'bucket_info' => { is => 'rw', isa => 'HashRef', default => {} },
 	'file_info' => { is => 'rw', isa => 'HashRef', default => {} },
 	;
 
-sub _api_setup ($self) {
+sub build_api_info ($self) {
 	my $response = $self->send_request(
 		url => 'b2_authorize_account',
-		authorization => 'Basic ' . encode_base64($self->application_key_id . ':' . $self->application_key)
+		authorization => 'Basic ' . encode_base64($self->application_key_id . ':' . $self->application_key),
 	);
 
 	if (!$response) {
-		$self->b2_login_error(1);
+		$self->login_error(1);
 		return {};
 	}
 
 	return {
 		'account_id' => $response->{accountId},
-		'api_url' => $response->{storageApi}->{apiUrl} . '/b2api/v4/',
+		'api_url' => $response->{apiInfo}->{storageApi}->{apiUrl} . '/b2api/v4/',
 		'account_authorization_token' => $response->{authorizationToken},
-		'download_url' => $response->{storageApi}->{downloadUrl},
-		'recommended_part_size' => $response->{storageApi}->{recommendedPartSize} || 104857600
+		'download_url' => $response->{apiInfo}->{storageApi}->{downloadUrl},
+		'recommended_part_size' => $response->{apiInfo}->{storageApi}->{recommendedPartSize} || 104857600
 	};
 }
 
@@ -56,7 +56,7 @@ signature_for send_request => (
 		url => NonEmptyStr,
 		authorization => Str, { optional => true },
 		headers => ArrayRef, { optional => true },
-		post_params => HashRef, { optional => true, default => {} },
+		post_params => HashRef, { optional => true },
 		file_contents => Value, { optional => true },
 	],
 	returns => Bool|HashRef,
@@ -64,7 +64,7 @@ signature_for send_request => (
 
 sub send_request ($self, $args) {
 	my $headers = [];
-	if ($args->headers->[0]) {
+	if ($args->headers && $args->headers->[0]) {
 		$headers = $args->headers;
 	}
 	
@@ -74,12 +74,12 @@ sub send_request ($self, $args) {
 	my $api_url = $args->url;
 	if ($args->url eq 'b2_authorize_account') {
 		$api_url = 'https://api.backblazeb2.com/b2api/v4/b2_authorize_account';
-	} elsif ($args->url != /^https/) {
+	} elsif ($args->url !~ /^https/) {
 		$api_url = $self->api_info->{api_url} . $args->url;
 	}
 	
 	# short-circuit if we had difficulty logging in previously
-	if ($self->b2_login_error) {
+	if ($self->login_error) {
 		# track the error / set current state
 		return $self->error_tracker(
 			'error_message' => "Problem logging into Backblaze.  Please check the 'errors' array in this object.",
@@ -87,17 +87,17 @@ sub send_request ($self, $args) {
 		);
 	}
 
-	my $response = {};
+	my $b2_response = {};
 	my $response_code = 200;
 
 	# are we uploading a file?
-	if ($args->endpoint =~ /b2_upload_file|b2_upload_part/) {
+	if ($args->url =~ /b2_upload_file|b2_upload_part/) {
 		# now upload the file
 		eval {
 			my $request = HTTP::Request->new( 'POST', $api_url, $headers, $args->file_contents );
 			my $response = LWP::UserAgent->new()->request($request);
 			$response_code = $response->code;
-			$response = decode_json( $response->content );
+			$b2_response = decode_json( $response->content );
 		};
 
 	# if not uploading and they sent POST params, we are doing a POST
@@ -106,7 +106,7 @@ sub send_request ($self, $args) {
 			my $request = HTTP::Request->new( 'POST', $api_url, $headers, encode_json($args->post_params) );
 			my $response = LWP::UserAgent->new()->request($request);
 			$response_code = $response->code;
-			$response = decode_json( $response->content );
+			$b2_response = decode_json( $response->content );
 		};
 
 	# otherwise, we are attempting a GET
@@ -115,18 +115,19 @@ sub send_request ($self, $args) {
 			my $request = HTTP::Request->new( 'GET', $api_url, $headers );
 			my $response = LWP::UserAgent->new()->request($request);
 			$response_code = $response->code;
+
 			# did we download a file?
-			if ($response->headers( 'X-Bz-File-Name' )) {
+			if ($response->header( 'X-Bz-File-Name' )) {
 				# grab those needed headers
 				foreach my $header ('Content-Length','Content-Type','X-Bz-File-Id','X-Bz-File-Name','X-Bz-Content-Sha1') {
-					$response->{$header} = $response->header( $header );
+					$b2_response->{$header} = $response->header( $header );
 				}
 
 				# and the file itself
-				$response->{file_contents} = $response->content;
+				$b2_response->{file_contents} = $response->content;
 
-			} elsif ($response_code eq '200') { # no, regular JSON, decode results
-				$response = decode_json( $response->content );
+			} elsif ($response_code == 200) { # regular JSON, decode results
+				$b2_response = decode_json( $response->content );
 			}
 		};
 	}
@@ -134,8 +135,8 @@ sub send_request ($self, $args) {
 	# there is a problem if there is a problem
 	if ($@ || $response_code ne '200') {
 		my $error_message;
-		if ($response->{message}) {
-			$error_message = 'API Message: ' . $response->{message};
+		if ($b2_response->{message}) {
+			$error_message = 'API Message: ' . $b2_response->{message};
 		} else {
 			$error_message = 'Error: ' . $@;
 		}
@@ -143,12 +144,12 @@ sub send_request ($self, $args) {
 		# track the error / set current state
 		return $self->error_tracker(
 			'error_message' => $error_message . ' (' . $response_code . ')',
-			'url' => $args->endpoint,
+			'url' => $args->url,
 		);
 	}	
 	
 	$self->current_status_is_not_ok(0);
-	return $response;
+	return $b2_response;
 }
 
 # for tracking errors into $self->{errrors}[];
@@ -174,12 +175,6 @@ sub error_tracker ($self, $args) {
 
 # please tell me the lastest error message
 # for tracking errors into $self->{errrors}[];
-signature_for latest_error => (
-	method => true,
-	named => [],	
-	returns => Str,
-);
-
 sub latest_error ($self) {
 	return $self->errors->[-1] || 'No error message found';
 }
@@ -188,7 +183,7 @@ sub latest_error ($self) {
 signature_for b2_download_file_by_id => (
 	method => true,
 	named => [
-		file_id => Str,
+		file_id => NonEmptyStr,
 		save_to_location => Str, { optional => true },
 	],
 	returns => Bool|HashRef,
@@ -268,7 +263,7 @@ sub save_downloaded_file ($self, $args) {
 	if (!(-d $args->save_to_location)) {
 		return $self->error_tracker(
 			'error_message' => "Can not auto-save file without a valid location. " . $args->save_to_location,
-			'endpoint' => 'save_downloaded_file',
+			'url' => 'save_downloaded_file',
 		);
 	}
 
@@ -276,7 +271,7 @@ sub save_downloaded_file ($self, $args) {
 	if ( !$args->response->{'X-Bz-File-Name'} || !length($args->response->{file_contents}) ) {
 		return $self->error_tracker(
 			'error_message' => "Can not auto-save without first downloading a file.",
-			'endpoint' => 'save_downloaded_file',
+			'url' => 'save_downloaded_file',
 		);
 	}
 
@@ -574,7 +569,7 @@ sub b2_bucket_maker ($self, $args) {
 		'post_params' => $post_params,
 	);
 
-	if ($self->current_status_not_ok) {
+	if ($self->current_status_is_not_ok) {
 		return 0;
 	}
 
@@ -613,7 +608,7 @@ sub b2_delete_bucket ($self, $args) {
 		},
 	);
 	
-	return $self->current_status_not_ok ? 0 : 1;
+	return $self->current_status_is_not_ok ? 0 : 1;
 }
 
 # method to delete a stored file object.  B2 thinks of these as 'versions,'
@@ -637,7 +632,7 @@ sub b2_delete_file_version ($self, $args) {
 		},
 	);
 
-	return $self->current_status_not_ok ? 0 : 1;
+	return $self->current_status_is_not_ok ? 0 : 1;
 }
 
 # method to upload a large file (>100MB)
