@@ -10,7 +10,7 @@ our $VERSION = "0.01";
 use v5.36; # or higher
 use Cpanel::JSON::XS;
 use Digest::SHA qw(sha1_hex);
-use HTTP::Request
+use HTTP::Request;
 use LWP::UserAgent;
 use MIME::Base64;
 use Path::Tiny;
@@ -30,27 +30,27 @@ use Marlin
 	;
 
 sub _api_setup ($self) {
-	$b2_response = $self->b2_talker(
+	$response = $self->send_request(
 		url => 'b2_authorize_account',
 		authorization => 'Basic ' . encode_base64($self->application_key_id . ':' . $self->application_key)
 	);
 
-	if (!$b2_response) {
+	if (!$response) {
 		$self->b2_login_error(1);
 		return {};
 	}
 
 	return {
-		'account_id' => $b2_response->{accountId},
-		'api_url' => $b2_response->{storageApi}->{apiUrl} . '/b2api/v4/',
-		'account_authorization_token' => $b2_response->{authorizationToken},
-		'download_url' => $b2_response->{storageApi}->{downloadUrl},
-		'recommended_part_size' => $b2_response->{storageApi}->{recommendedPartSize} || 104857600
+		'account_id' => $response->{accountId},
+		'api_url' => $response->{storageApi}->{apiUrl} . '/b2api/v4/',
+		'account_authorization_token' => $response->{authorizationToken},
+		'download_url' => $response->{storageApi}->{downloadUrl},
+		'recommended_part_size' => $response->{storageApi}->{recommendedPartSize} || 104857600
 	};
 }
 
 # generic method to handle communication to B2
-signature_for b2_talker => (
+signature_for send_request => (
 	method	=> true,
 	named	=> [
 		url => NonEmptyStr,
@@ -62,7 +62,7 @@ signature_for b2_talker => (
 	returns => Bool|HashRef,
 );
 
-sub b2_talker ($self, $args) {
+sub send_request ($self, $args) {
 	my $headers = [];
 	if ($args->headers[0]) {
 		$headers = $args->headers;
@@ -87,8 +87,8 @@ sub b2_talker ($self, $args) {
 		);
 	}
 
-	my $b2_response = {};
-	my $b2_response_code = 200;
+	my $response = {};
+	my $response_code = 200;
 
 	# are we uploading a file?
 	if ($args->endpoint =~ /b2_upload_file|b2_upload_part/) {
@@ -96,8 +96,8 @@ sub b2_talker ($self, $args) {
 		eval {
 			my $request = HTTP::Request->new( 'POST', $api_url, $headers, $args->file_contents );
 			my $response = LWP::UserAgent->new()->request($request);
-			$b2_response_code = $response->code;
-			$b2_response = decode_json( $response->content );
+			$response_code = $response->code;
+			$response = decode_json( $response->content );
 		};
 
 	# if not uploading and they sent POST params, we are doing a POST
@@ -105,8 +105,8 @@ sub b2_talker ($self, $args) {
 		eval {
 			my $request = HTTP::Request->new( 'POST', $api_url, $headers, encode_json($args->post_params) );
 			my $response = LWP::UserAgent->new()->request($request);
-			$b2_response_code = $response->code;
-			$b2_response = decode_json( $response->content );
+			$response_code = $response->code;
+			$response = decode_json( $response->content );
 		};
 
 	# otherwise, we are attempting a GET
@@ -114,27 +114,27 @@ sub b2_talker ($self, $args) {
 		eval {
 			my $request = HTTP::Request->new( 'GET', $api_url, $headers );
 			my $response = LWP::UserAgent->new()->request($request);
-			$b2_response_code = $response->code;
+			$response_code = $response->code;
 			# did we download a file?
 			if ($response->headers( 'X-Bz-File-Name' )) {
 				# grab those needed headers
 				foreach my $header ('Content-Length','Content-Type','X-Bz-File-Id','X-Bz-File-Name','X-Bz-Content-Sha1') {
-					$b2_response->{$header} = $response->header( $header );
+					$response->{$header} = $response->header( $header );
 				}
 
 				# and the file itself
-				$b2_response->{file_contents} = $response->content;
+				$response->{file_contents} = $response->content;
 
 			} elsif ($response_code eq '200') { # no, regular JSON, decode results
-				$b2_response = decode_json( $response->content );
+				$response = decode_json( $response->content );
 			}
 		};
 	}
 	
 	# there is a problem if there is a problem
 	if ($@ || $response_code ne '200') {
-		if ($b2_response->{message}) {
-			$error_message = 'API Message: ' . $b2_response->{message};
+		if ($response->{message}) {
+			$error_message = 'API Message: ' . $response->{message};
 		} else {
 			$error_message = 'Error: ' . $@;
 		}
@@ -147,7 +147,7 @@ sub b2_talker ($self, $args) {
 	}	
 	
 	$self->current_status_is_not_ok(0);
-	return $b2_response;
+	return $response;
 }
 
 # for tracking errors into $self->{errrors}[];
@@ -193,7 +193,7 @@ signature_for b2_download_file_by_id => (
 );
 
 sub b2_download_file_by_id ($self, $args) {
-	my $b2_response = $self->b2_talker(
+	my $response = $self->send_request(
 		'url' => $self->api_info->{api_url} . 'b2_download_file_by_id' . '?fileId=' . $args->file_id,
 	);
 
@@ -205,12 +205,12 @@ sub b2_download_file_by_id ($self, $args) {
 	if ($args->save_to_location) {
 		$self->save_downloaded_file(
 			save_to_location => $args->save_to_location, 
-			b2_response => $b2_response
+			response => $response
 		);
 	}
 
 	# return file contents
-	return $b2_response;
+	return $response;
 }
 
 # method to download a file via the bucket name + file name
@@ -226,12 +226,12 @@ signature_for b2_download_file_by_name => (
 
 sub b2_download_file_by_name ($self, $args) {
 	# send the request, as a GET
-	$self->b2_talker(
+	$self->send_request(
 		'url' => $self->api_info->{api_url} . '/file/' . uri_escape($args->bucket_name) . '/' . uri_escape($args->file_name),
 	);
 
-	# if the file was found, you will have the relevant headers in $b2_response
-	# as well as the file's contents in $b2_response->{file_contents}
+	# if the file was found, you will have the relevant headers in $response
+	# as well as the file's contents in $response->{file_contents}
 
 	if ($self->current_status_is_not_ok) {
 		return 0;
@@ -241,12 +241,12 @@ sub b2_download_file_by_name ($self, $args) {
 	if ($args->save_to_location) {
 		$self->save_downloaded_file(
 			save_to_location => $args->save_to_location, 
-			b2_response => $b2_response
+			response => $response
 		);	
 	}
 
 	# return file contents
-	return $b2_response;
+	return $response;
 }
 
 # method to save downloaded files into a target location
@@ -271,7 +271,7 @@ sub save_downloaded_file ($self, $args) {
 	}
 
 	# make sure they actually downloaded a file
-	if ( !$args->b2_response->{'X-Bz-File-Name'} || !length($args->b2_response->{file_contents}) ) {
+	if ( !$args->response->{'X-Bz-File-Name'} || !length($args->response->{file_contents}) ) {
 		return $self->error_tracker(
 			'error_message' => "Can not auto-save without first downloading a file.",
 			'endpoint' => 'save_downloaded_file',
@@ -281,10 +281,10 @@ sub save_downloaded_file ($self, $args) {
 	# still here?  do the save
 
 	# add the filename
-	my $save_to_location = $args->save_to_location . '/' . $args->b2_response->{'X-Bz-File-Name'};
+	my $save_to_location = $args->save_to_location . '/' . $args->response->{'X-Bz-File-Name'};
 
 	# i really love Path::Tiny
-	path($save_to_location)->spew_raw( $args->b2_response->{file_contents} );
+	path($save_to_location)->spew_raw( $args->response->{file_contents} );
 
 	# return OK
 	return 1;
@@ -342,7 +342,7 @@ sub b2_upload_file ($self, $args) {
 	}
 
 	# send the special request
-	return $self->b2_talker(
+	return $self->send_request(
 		'url' => $upload_info->{upload_url},
 		'authorization' => $upload_info->{authorization_token},
 		'file_contents' => $file_contents,
@@ -364,7 +364,7 @@ signature_for b2_get_upload_info => (
 );
 
 sub b2_get_upload_info ($self, $args) {
-	my $b2_response = $self->b2_talker(
+	my $response = $self->send_request(
 		'url' => 'b2_get_upload_info',
 		'post_params' => {
 			'bucketId' => $self->b2_get_bucket_id(
@@ -373,13 +373,13 @@ sub b2_get_upload_info ($self, $args) {
 		},
 	);
 	
-	if (!$b2_response) {
+	if (!$response) {
 		return 0;
 	}
 	
 	return {
-		'upload_url' => $b2_response->{uploadUrl},
-		'authorization_token' => $b2_response->{authorizationToken},
+		'upload_url' => $response->{uploadUrl},
+		'authorization_token' => $response->{authorizationToken},
 	};
 }
 
@@ -425,7 +425,7 @@ sub b2_list_buckets ($self, $args) {
 	return 1 if $self->bucket_info->{$args->bucket_name}->{bucket_id};
 
 	# send the request
-	my $b2_response = $self->b2_talker(
+	my $response = $self->send_request(
 		'url' => 'b2_list_buckets',
 		'post_params' => {
 			'accountId' => $self->api_info->{account_id},
@@ -439,7 +439,7 @@ sub b2_list_buckets ($self, $args) {
 
 	# if we succeeded, load in all the found buckets to $self->{buckets}
 	# that will be a hash of info, keyed by name
-	foreach my $bucket_info (@{ $b2_response->{buckets} }) {
+	foreach my $bucket_info (@{ $response->{buckets} }) {
 		my $bucket_name = $bucket_info->{bucketName};
 		$self->bucket_info->{$bucket_name} = {
 			'bucket_id' => $bucket_info->{bucketId},
@@ -479,7 +479,7 @@ signature_for b2_list_file_names => (
 sub b2_list_file_names ($self, $args) {
 	my $bucket_name = $args->bucket_name;
 
-	my $b2_response = $self->b2_talker(
+	my $response = $self->send_request(
 		'url' => 'b2_list_file_names',
 		'post_params' => {
 			'bucketId'      => $self->b2_get_bucket_id( 'bucket_name' => $bucket_name ),
@@ -495,16 +495,16 @@ sub b2_list_file_names ($self, $args) {
 		return 0;
 	}
 	
-	$self->bucket_info->{$bucket_name}->{next_file_name} = $b2_response->{nextFileName};
+	$self->bucket_info->{$bucket_name}->{next_file_name} = $response->{nextFileName};
 
 	# add to our possibly-started array of file info for this bucket
 	push(
 		@{ $self->{buckets}{$bucket_name}{files} },
-		@{ $b2_response->{files} }
+		@{ $response->{files} }
 	);
 
 	# kindly return the request results as a refernce (arrayref)
-	return $b2_response->{files};
+	return $response->{files};
 }
 
 # method to get info for a specific file
@@ -524,7 +524,7 @@ sub b2_get_file_info ($self, $args) {
 	}
 
 	# retrieve the file information
-	my $b2_response = $self->b2_talker(
+	my $response = $self->send_request(
 		'url' => 'b2_get_file_info',
 		'post_params' => {
 			'fileId' => $file_id,
@@ -536,9 +536,9 @@ sub b2_get_file_info ($self, $args) {
 	}
 
 	# i am not going to waste the CPU cycles de-camelizing these sub-keys
-	$self->file_info->{$file_id} = $b2_response;
+	$self->file_info->{$file_id} = $response;
 
-	return $b2_response;
+	return $response;
 }
 
 # method to create a bucket
@@ -568,7 +568,7 @@ sub b2_bucket_maker ($self, $args) {
 	}
 
 	# create the bucket...
-	my $b2_response = $self->b2_talker(
+	my $response = $self->send_request(
 		'url' => 'b2_create_bucket',
 		'post_params' => $post_params,
 	);
@@ -579,7 +579,7 @@ sub b2_bucket_maker ($self, $args) {
 
 	# otherwise successful, stash our new bucket into $self->{buckets}
 	$self->bucket_info->{$bucket_name} = {
-		'bucket_id' => $b2_response->{bucketId},
+		'bucket_id' => $response->{bucketId},
 		'bucket_type' => 'allPrivate',
 	};
 
@@ -604,7 +604,7 @@ sub b2_delete_bucket ($self, $args) {
 	}
 
 	# send the request
-	$self->b2_talker(
+	$self->send_request(
 		'url' => 'b2_delete_bucket',
 		'post_params' => {
 			'accountId' => $self->api_info->account_id,
@@ -628,7 +628,7 @@ signature_for b2_delete_file_version => (
 
 sub b2_delete_file_version ($self, $args) {
 	# send the request
-	$self->b2_talker(
+	$self->send_request(
 		'url' => 'b2_delete_file_version',
 		'post_params' => {
 			'fileName' => $args->file_name,
@@ -681,7 +681,7 @@ sub b2_upload_large_file ($self, $args) {
 	}
 
 	# kick off the upload in the API
-	my $b2_response = $self->b2_talker(
+	my $response = $self->send_request(
 		'url' => 'b2_start_large_file',
 		'post_params' => {
 			'bucketId' => $bucket_id,
@@ -691,7 +691,7 @@ sub b2_upload_large_file ($self, $args) {
 	);
 
 	# these are all needed for each b2_upload_part web call
-	my $large_file_id = $b2_response->{fileId};
+	my $large_file_id = $response->{fileId};
 	if (!$bucket_id) {
 		return $self->error_tracker(
 			'error_message' => 'Error in b2_upload_large_file for ' . $args->new_file_name,
@@ -715,7 +715,7 @@ sub b2_upload_large_file ($self, $args) {
 		}
 
 		# get the next upload url for this part
-		$self->b2_talker(
+		$self->send_request(
 			'url' => 'b2_get_upload_part_url',
 			'post_params' => {
 				'fileId' => $large_file_id,
@@ -727,9 +727,9 @@ sub b2_upload_large_file ($self, $args) {
 		push(@sha1_array, sha1_hex( $file_contents_part ));
 
 		# upload that part
-		$self->b2_talker(
-			'url' => $b2_response->{uploadUrl},
-			'authorization' => $b2_response->{authorizationToken},
+		$self->send_request(
+			'url' => $response->{uploadUrl},
+			'authorization' => $response->{authorizationToken},
 			'headers' => {
 				'X-Bz-Content-Sha1' => $sha1_array[-1],
 				'X-Bz-Part-Number' => $part_number,
@@ -747,7 +747,7 @@ sub b2_upload_large_file ($self, $args) {
 	close FH;
 
 	# and tell B2
-	$self->b2_talker(
+	$self->send_request(
 		'url' => 'b2_finish_large_file',
 		'post_params' => {
 			'fileId' => $large_file_id,
@@ -794,7 +794,7 @@ Backblaze::B2V4 - Client library for the Backblaze B2 Cloud Storage Service V4 A
 		'new_file_name' => 'ginger_was_perfect.jpg',
 		'file_contents' => $file_contents
 	);
-	# B2 file ID (fGUID) is now in $b2->{b2_response}{fileId}
+	# B2 file ID (fGUID) is now in $response->{fileId}
 	# Best to load $file_contents via Path::Tiny's slurp_raw() method
 
 	# download that file to /opt/majestica/tmp
@@ -804,7 +804,7 @@ Backblaze::B2V4 - Client library for the Backblaze B2 Cloud Storage Service V4 A
 	my $operation_status = $b2->b2_download_file_by_id('X-Bz-File-Id GUID from above','/opt/majestica/tmp');
 
 	# you can leave off the directory to just have the file contents into
-	# $b2->{b2_response}{file_contents}
+	# $response->{file_contents}
 
 	# $operation_status is now 'OK' or 'Error', and is
 	# also stashed in $b2->{current_status}
@@ -814,7 +814,7 @@ Backblaze::B2V4 - Client library for the Backblaze B2 Cloud Storage Service V4 A
 	if ($b2->{current_status} eq 'OK') {
 
 		# all is well -- what did we get?
-		print Dumper($b2->{b2_response});
+		print Dumper($response);
 
 	} elsif ($b2->{current_status} eq 'Error') {
 
@@ -911,8 +911,8 @@ to auto-save the file, provide a path to an existing directory as the
 second argument.
 
 Regardless of auto-save, the file's raw contents will be placed in to
-$b2->{b2_response}{file_contents} and the following keys
-will be populated under $b2->{b2_response}:
+$response->{file_contents} and the following keys
+will be populated under $response:
 
 	Content-Length
 	Content-Type
@@ -962,7 +962,7 @@ You can also pass a 'content-type' key with the MIME type for the new
 file.  The default is 'b2/auto'.
 
 Upon a successful upload, the new GUID for the file will be available
-in $b2->{b2_response}{fileId} .
+in $response->{fileId} .
 
 See: https://www.backblaze.com/b2/docs/b2_upload_file.html
 
@@ -1115,14 +1115,14 @@ Example:
 
 	my $operation_status = $b2->b2_delete_file_version('SomeFileName.ext','AN84_CHAR_GUID_FROM_B2');
 
-=head2 b2_talker / b2_get_upload_info  / b2_list_buckets
+=head2 send_request / b2_get_upload_info  / b2_list_buckets
 
-b2_talker() handles all the communications with B2.
+send_request() handles all the communications with B2.
 You should be able to use this to make calls not explicitly
 provided by this library.
 
-If b2_talker() gets a 200 HTTP status from B2, then the call went
-great, the JSON response will be loaded into $b2->{b2_response},
+If send_request() gets a 200 HTTP status from B2, then the call went
+great, the JSON response will be loaded into $response,
 and $b2->{current_status} will be set to 'OK'.
 
 If a 200 is not received from B2, $b2->{current_status} will be
@@ -1137,14 +1137,14 @@ $list_buckets_url = $b2->{api_url}.'/b2api/v2/b2_list_buckets';
 
 Example of a GET API request:
 
-	my $operation_status = $b2->b2_talker(
+	my $operation_status = $b2->send_request(
 		'url' => 'https://SomeB2.API.URL?with=GETparams',
 		'authorization' => $b2->{account_authorization_token},
 	);
 
 Example of a POST API request:
 
-	my $operation_status = $b2->b2_talker(
+	my $operation_status = $b2->send_request(
 		'url' => 'https://SomeB2.API.URL',
 		'authorization' => $b2->{account_authorization_token},
 		'post_params' => {
@@ -1166,8 +1166,8 @@ Example:
 This populates:
 
 	my $operation_status = $b2->{bucket_info}{'MyBucketName'} = {
-		'upload_url' => $b2->{b2_response}{uploadUrl},
-		'authorization_token' => $b2->{b2_response}{authorizationToken},
+		'upload_url' => $response->{uploadUrl},
+		'authorization_token' => $response->{authorizationToken},
 	};
 
 Note: You have to call b2_get_upload_info on a bucket for each file
@@ -1195,32 +1195,23 @@ This module requires:
 
 	Cpanel::JSON::XS
 	Digest::SHA
+	HTTP::Request
+	LWP::Protocol::https
+	LWP::UserAgent
+	Marlin
 	MIME::Base64
 	Path::Tiny
 	URI::Escape
-	WWW::Mechanize
-	LWP::Protocol::https
-
-In order to get this to work properly on Ubuntu 18.04 and 20.04, I installed these
-system packages:
-
-	build-essential
-	zlib1g-dev
-	libssl-dev
-	cpanminus
-	perl-doc
 
 =head1 SEE ALSO
 
-B2 API Docs:  https://www.backblaze.com/b2/docs/
-
-Backblaze::B2 - V1 API Client for B2
+B2 API V4 Docs: https://www.backblaze.com/apidocs/b2-authorize-account
 
 Paws::S3 - If using Backblaze's S3-compatible API.
 
 =head1 AUTHOR / BUGS
 
-Eric Chernoff <ericschernoff@gmail.com> - Please send me a note with any bugs or suggestions.
+Eric Chernoff <eric@weaverstreet.net> - Please send me a note with any bugs or suggestions.
 
 ESTRABD <estrabd@cpan.org> - Enhanced b2_list_file_names() to fully use options and a great bugfix 
 when using the 'file_contents' option in the b2_upload_file() method.
