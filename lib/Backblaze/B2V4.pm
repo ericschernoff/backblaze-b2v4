@@ -7,7 +7,7 @@ use warnings;
 
 our $VERSION = "0.01";
 
-use v5.36; # or higher
+use v5.38; # or higher
 use Cpanel::JSON::XS;
 use Digest::SHA qw(sha1_hex);
 use HTTP::Request;
@@ -16,8 +16,8 @@ use MIME::Base64;
 use Path::Tiny;
 use URI::Escape;
 
-use Types::Common -lexical, -all;
-use Marlin::Util -lexical, -all;
+use Types::Common -all;
+use Marlin::Util -all;
 use Marlin
 	'application_key_id' => { is => 'ro', isa => 'NonEmptyStr' },
 	'application_key' => { is => 'ro', isa => 'NonEmptyStr' },
@@ -30,7 +30,7 @@ use Marlin
 	;
 
 sub _api_setup ($self) {
-	$response = $self->send_request(
+	my $response = $self->send_request(
 		url => 'b2_authorize_account',
 		authorization => 'Basic ' . encode_base64($self->application_key_id . ':' . $self->application_key)
 	);
@@ -51,8 +51,8 @@ sub _api_setup ($self) {
 
 # generic method to handle communication to B2
 signature_for send_request => (
-	method	=> true,
-	named	=> [
+	method => true,
+	named => [
 		url => NonEmptyStr,
 		authorization => Str, { optional => true },
 		headers => ArrayRef, { optional => true },
@@ -64,7 +64,7 @@ signature_for send_request => (
 
 sub send_request ($self, $args) {
 	my $headers = [];
-	if ($args->headers[0]) {
+	if ($args->headers->[0]) {
 		$headers = $args->headers;
 	}
 	
@@ -133,6 +133,7 @@ sub send_request ($self, $args) {
 	
 	# there is a problem if there is a problem
 	if ($@ || $response_code ne '200') {
+		my $error_message;
 		if ($response->{message}) {
 			$error_message = 'API Message: ' . $response->{message};
 		} else {
@@ -152,8 +153,8 @@ sub send_request ($self, $args) {
 
 # for tracking errors into $self->{errrors}[];
 signature_for error_tracker => (
-	method	=> true,
-	named	=> [
+	method => true,
+	named => [
 		error_message => Str,
 		url => Str,
 	],
@@ -174,18 +175,19 @@ sub error_tracker ($self, $args) {
 # please tell me the lastest error message
 # for tracking errors into $self->{errrors}[];
 signature_for latest_error => (
-	method	=> true,
+	method => true,
+	named => [],	
 	returns => Str,
 );
 
 sub latest_error ($self) {
-	return $self->errors[-1] || 'No error message found';
+	return $self->errors->[-1] || 'No error message found';
 }
 
 # method to download a file by ID; probably most commonly used
 signature_for b2_download_file_by_id => (
-	method	=> true,
-	named	=> [
+	method => true,
+	named => [
 		file_id => Str,
 		save_to_location => Str, { optional => true },
 	],
@@ -215,8 +217,8 @@ sub b2_download_file_by_id ($self, $args) {
 
 # method to download a file via the bucket name + file name
 signature_for b2_download_file_by_name => (
-	method	=> true,
-	named	=> [
+	method => true,
+	named => [
 		bucket_name => NonEmptyStr,
 		file_name => NonEmptyStr,
 		save_to_location => Str, { optional => true },
@@ -226,7 +228,7 @@ signature_for b2_download_file_by_name => (
 
 sub b2_download_file_by_name ($self, $args) {
 	# send the request, as a GET
-	$self->send_request(
+	my $response = $self->send_request(
 		'url' => $self->api_info->{api_url} . '/file/' . uri_escape($args->bucket_name) . '/' . uri_escape($args->file_name),
 	);
 
@@ -252,8 +254,8 @@ sub b2_download_file_by_name ($self, $args) {
 # method to save downloaded files into a target location
 # only call after successfully calling b2_download_file_by_id() or b2_download_file_by_name()
 signature_for save_downloaded_file => (
-	method	=> true,
-	named	=> [
+	method => true,
+	named => [
 		bucket_name => NonEmptyStr,
 		file_name => NonEmptyStr,
 		save_to_location => Str, { optional => true },
@@ -292,11 +294,11 @@ sub save_downloaded_file ($self, $args) {
 
 # method to upload a file into Backblaze B2
 signature_for b2_upload_file => (
-	method	=> true,
-	named	=> [
+	method => true,
+	named => [
 		new_file_name => NonEmptyStr, { optional => true },
 		bucket_name => NonEmptyStr,
-		content_type => Str, { NonEmptyStr => true, default => 'b2/x-auto' },
+		content_type => Str, { optional => true, default => 'b2/x-auto' },
 		file_location => Str, { optional => true },
 		file_contents => Value, { optional => true },
 	],
@@ -304,8 +306,6 @@ signature_for b2_upload_file => (
 );
 
 sub b2_upload_file ($self, $args) {
-	my $self = shift;
-
 	# send the file contents?
 	my $file_contents = $args->file_contents;
 	my $new_file_name = $args->new_file_name;
@@ -315,7 +315,7 @@ sub b2_upload_file ($self, $args) {
 		$file_contents = path( $args->file_location )->slurp_raw;
 		# if they didn't provide a file-name, use the one on this file
 		if (!$new_file_name) {
-			$anew_file_name = path( $args->file_location )->basename;
+			$new_file_name = path( $args->file_location )->basename;
 		}
 	}
 
@@ -356,8 +356,8 @@ sub b2_upload_file ($self, $args) {
 
 # method to get the information needed to upload into a specific B2 bucket
 signature_for b2_get_upload_info => (
-	method	=> true,
-	named	=> [
+	method => true,
+	named => [
 		bucket_name => NonEmptyStr,
 	],
 	returns => HashRef|Bool,
@@ -384,8 +384,8 @@ sub b2_get_upload_info ($self, $args) {
 }
 
 signature_for b2_get_bucket_id => (
-	method	=> true,
-	named	=> [
+	method => true,
+	named => [
 		bucket_name => NonEmptyStr,
 		auto_create_bucket => Bool, , { optional => true, default => true },
 	],
@@ -412,8 +412,8 @@ sub b2_get_bucket_id ($self, $args) {
 
 # method to load information on one bucket or all buckets
 signature_for b2_list_buckets => (
-	method	=> true,
-	named	=> [
+	method => true,
+	named => [
 		bucket_name => NonEmptyStr,
 		auto_create_bucket => Bool
 	],
@@ -448,6 +448,7 @@ sub b2_list_buckets ($self, $args) {
 	}
 
 	# if that bucket was not found, maybe they want to go ahead and create it?
+	my $bucket_name = $args->bucket_name;
 	if ($bucket_name && !$self->bucket_info->{$bucket_name} && $args->auto_create_bucket) {
 		$self->b2_bucket_maker(
 			bucket_name => $bucket_name
@@ -465,8 +466,8 @@ sub b2_list_buckets ($self, $args) {
 # this client library is bucket-name-centric, so it looks for the bucket name as a arg
 # if there are more than 1000 files, then call this repeatedly
 signature_for b2_list_file_names => (
-	method	=> true,
-	named	=> [
+	method => true,
+	named => [
 		bucket_name => Str,
 		prefix => Str, { optional => true},
 		delimiter => Str, { optional => true},
@@ -509,8 +510,8 @@ sub b2_list_file_names ($self, $args) {
 
 # method to get info for a specific file
 signature_for b2_list_file_names => (
-	method	=> true,
-	named	=> [
+	method => true,
+	named => [
 		file_id => Str,
 	],
 	returns => Bool|ArrayRef,
@@ -543,8 +544,8 @@ sub b2_get_file_info ($self, $args) {
 
 # method to create a bucket
 signature_for b2_bucket_maker => (
-	method	=> true,
-	named	=> [
+	method => true,
+	named => [
 		bucket_name => NonEmptyStr,
 		disable_encryption => Bool, { optional => true, default => 1},
 	],
@@ -578,7 +579,7 @@ sub b2_bucket_maker ($self, $args) {
 	}
 
 	# otherwise successful, stash our new bucket into $self->{buckets}
-	$self->bucket_info->{$bucket_name} = {
+	$self->bucket_info->{$args->bucket_name} = {
 		'bucket_id' => $response->{bucketId},
 		'bucket_type' => 'allPrivate',
 	};
@@ -588,8 +589,8 @@ sub b2_bucket_maker ($self, $args) {
 
 # method to delete a bucket -- please don't use ;)
 signature_for b2_delete_bucket => (
-	method	=> true,
-	named	=> [
+	method => true,
+	named => [
 		bucket_name => NonEmptyStr,
 	],
 	returns => Bool,
@@ -618,8 +619,8 @@ sub b2_delete_bucket ($self, $args) {
 # method to delete a stored file object.  B2 thinks of these as 'versions,'
 # but if you use unique names, one version = one file
 signature_for b2_delete_file_version => (
-	method	=> true,
-	named	=> [
+	method => true,
+	named => [
 		file_name => NonEmptyStr,
 		file_id => NonEmptyStr,
 	],
@@ -641,12 +642,12 @@ sub b2_delete_file_version ($self, $args) {
 
 # method to upload a large file (>100MB)
 signature_for b2_upload_large_file => (
-	method	=> true,
-	named	=> [
+	method => true,
+	named => [
 		new_file_name => NonEmptyStr,
 		bucket_name => NonEmptyStr,
 		file_location => NonEmptyStr,
-		content_type => Str, { NonEmptyStr => true, default => 'b2/x-auto' },
+		content_type => NonEmptyStr, { optional => true, default => 'b2/x-auto' },
 	],
 	returns => Bool,
 );
@@ -699,7 +700,7 @@ sub b2_upload_large_file ($self, $args) {
 	}
 
 	# open the large file
-	open(FH, $args->file_location);
+	open(my $fh, $args->file_location);
 	my $remaining_file_size = $stat->size;
 	my $part_number = 1;
 
@@ -723,7 +724,8 @@ sub b2_upload_large_file ($self, $args) {
 		);
 
 		# read in that section of the file and prep the SHA
-		sysread FH, my $file_contents_part, $size_sent;
+		my $file_contents_part;
+		sysread $fh, $file_contents_part, $size_sent;
 		push(@sha1_array, sha1_hex( $file_contents_part ));
 
 		# upload that part
@@ -744,7 +746,7 @@ sub b2_upload_large_file ($self, $args) {
 	}
 
 	# close the file
-	close FH;
+	close $fh;
 
 	# and tell B2
 	$self->send_request(
