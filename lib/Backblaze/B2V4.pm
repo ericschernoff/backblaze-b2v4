@@ -187,7 +187,6 @@ signature_for save_downloaded_file => (
 	named => [
 		save_to_location => NonEmptyStr,
 		response => HashRef,
-		save_to_location => Str, { optional => true },
 	],
 	returns => Bool,
 );
