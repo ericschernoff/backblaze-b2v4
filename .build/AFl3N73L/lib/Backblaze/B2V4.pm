@@ -29,7 +29,6 @@ use Marlin
 	'file_info' => { is => 'rw', isa => 'HashRef', default => {} },
 	;
 
-# builder method to create api_info hashref attribute
 sub build_api_info ($self) {
 	my $response = $self->send_request(
 		url => 'b2_authorize_account',
@@ -180,49 +179,6 @@ sub latest_error ($self) {
 	return $self->errors->[-1] || 'No error message found';
 }
 
-# method to save downloaded files into a target location
-# only call after successfully calling b2_download_file_by_id() or b2_download_file_by_name()
-signature_for save_downloaded_file => (
-	method => true,
-	named => [
-		save_to_location => NonEmptyStr,
-		response => HashRef,
-		save_to_location => Str, { optional => true },
-	],
-	returns => Bool,
-);
-
-sub save_downloaded_file ($self, $args) {
-	# error out if that location don't exist
-	if (!(-d $args->save_to_location)) {
-		return $self->error_tracker(
-			'error_message' => "Can not auto-save file without a valid location. " . $args->save_to_location,
-			'url' => 'save_downloaded_file',
-		);
-	}
-
-	# make sure they actually downloaded a file
-	if ( !$args->response->{'X-Bz-File-Name'} || !length($args->response->{file_contents}) ) {
-		return $self->error_tracker(
-			'error_message' => "Can not auto-save without first downloading a file.",
-			'url' => 'save_downloaded_file',
-		);
-	}
-
-	# still here?  do the save
-
-	# add the filename
-	my $save_to_location = $args->save_to_location . '/' . $args->response->{'X-Bz-File-Name'};
-
-	# i really love Path::Tiny
-	path($save_to_location)->spew_raw( $args->response->{file_contents} );
-
-	# return OK
-	return 1;
-}
-
-## Start actual public methods ##
-
 # method to download a file by ID; probably most commonly used
 signature_for b2_download_file_by_id => (
 	method => true,
@@ -273,6 +229,7 @@ sub b2_download_file_by_name ($self, $args) {
 
 	# if the file was found, you will have the relevant headers in $response
 	# as well as the file's contents in $response->{file_contents}
+
 	if ($self->current_status_is_not_ok) {
 		return 0;
 	}
@@ -289,6 +246,47 @@ sub b2_download_file_by_name ($self, $args) {
 	return $response;
 }
 
+# method to save downloaded files into a target location
+# only call after successfully calling b2_download_file_by_id() or b2_download_file_by_name()
+signature_for save_downloaded_file => (
+	method => true,
+	named => [
+		bucket_name => NonEmptyStr,
+		file_name => NonEmptyStr,
+		save_to_location => Str, { optional => true },
+	],
+	returns => Bool,
+);
+
+sub save_downloaded_file ($self, $args) {
+	# error out if that location don't exist
+	if (!(-d $args->save_to_location)) {
+		return $self->error_tracker(
+			'error_message' => "Can not auto-save file without a valid location. " . $args->save_to_location,
+			'url' => 'save_downloaded_file',
+		);
+	}
+
+	# make sure they actually downloaded a file
+	if ( !$args->response->{'X-Bz-File-Name'} || !length($args->response->{file_contents}) ) {
+		return $self->error_tracker(
+			'error_message' => "Can not auto-save without first downloading a file.",
+			'url' => 'save_downloaded_file',
+		);
+	}
+
+	# still here?  do the save
+
+	# add the filename
+	my $save_to_location = $args->save_to_location . '/' . $args->response->{'X-Bz-File-Name'};
+
+	# i really love Path::Tiny
+	path($save_to_location)->spew_raw( $args->response->{file_contents} );
+
+	# return OK
+	return 1;
+}
+
 # method to upload a file into Backblaze B2
 signature_for b2_upload_file => (
 	method => true,
@@ -299,7 +297,7 @@ signature_for b2_upload_file => (
 		file_location => Str, { optional => true },
 		file_contents => Value, { optional => true },
 	],
-	returns => Bool|Str,
+	returns => Bool|HashRef,
 );
 
 sub b2_upload_file ($self, $args) {
@@ -337,7 +335,7 @@ sub b2_upload_file ($self, $args) {
 	}
 
 	# send the special request
-	my $response => $self->send_request(
+	return $self->send_request(
 		'url' => $upload_info->{upload_url},
 		'authorization' => $upload_info->{authorization_token},
 		'file_contents' => $file_contents,
@@ -347,8 +345,6 @@ sub b2_upload_file ($self, $args) {
 			'Content-Type' => $content_type,
 		},
 	);
-	
-	return $self->current_status_is_not_ok ? 0 : $response->{fileId};
 }
 
 # method to get the information needed to upload into a specific B2 bucket
@@ -362,7 +358,7 @@ signature_for b2_get_upload_info => (
 
 sub b2_get_upload_info ($self, $args) {
 	my $response = $self->send_request(
-		'url' => 'b2_get_upload_url',
+		'url' => 'b2_get_upload_info',
 		'post_params' => {
 			'bucketId' => $self->b2_get_bucket_id(
 				'bucket_name' => $args->bucket_name,
@@ -501,7 +497,7 @@ sub b2_list_file_names ($self, $args) {
 		@{ $response->{files} }
 	);
 
-	# kindly return the request results as a reference (arrayref)
+	# kindly return the request results as a refernce (arrayref)
 	return $response->{files};
 }
 
@@ -544,7 +540,7 @@ signature_for b2_bucket_maker => (
 	method => true,
 	named => [
 		bucket_name => NonEmptyStr,
-		disable_encryption => Bool, { optional => true, default => 0},
+		disable_encryption => Bool, { optional => true, default => 1},
 	],
 	returns => Bool,
 );
@@ -559,7 +555,7 @@ sub b2_bucket_maker ($self, $args) {
 
 	# unless instructed otherwise, we should encrypt the files in this bucket
 	unless ($args->disable_encryption) {
-		$post_params->{defaultServerSideEncryption} = {
+		$$post_params{defaultServerSideEncryption} = {
 			'mode' => 'SSE-B2',
 			'algorithm' => 'AES256',
 		};
@@ -646,7 +642,7 @@ signature_for b2_upload_large_file => (
 		file_location => NonEmptyStr,
 		content_type => NonEmptyStr, { optional => true, default => 'b2/x-auto' },
 	],
-	returns => Bool|Str,
+	returns => Bool,
 );
 
 sub b2_upload_large_file ($self, $args) {
@@ -746,7 +742,7 @@ sub b2_upload_large_file ($self, $args) {
 	close $fh;
 
 	# and tell B2
-	my $response = $self->send_request(
+	$self->send_request(
 		'url' => 'b2_finish_large_file',
 		'post_params' => {
 			'fileId' => $large_file_id,
@@ -755,7 +751,7 @@ sub b2_upload_large_file ($self, $args) {
 	);
 
 	# phew, i'm tired...
-	return $self->current_status_is_not_ok ? 0 : $response->{fileId};
+	return 1;
 }
 
 1;
@@ -782,46 +778,50 @@ Backblaze::B2V4 - Client library for the Backblaze B2 Cloud Storage Service V4 A
 	# let's say we have a B2 bucket called 'GingerAnna' and a JPG called 'ginger_was_perfect.jpg'.
 
 	# upload a file from your file system
-	my $response = $b2->b2_upload_file(
-		bucket_name => 'GingerAnna',
-		file_location => '/path/to/ginger_was_perfect.jpg'
+	my $operation_status = $b2->b2_upload_file(
+		'bucket_name' => 'GingerAnna',
+		'file_location' => '/path/to/ginger_was_perfect.jpg'
 	);
 
 	# upload a file you have in a scalar
-	my $response = $b2->b2_upload_file(
-		bucket_name => 'GingerAnna',
-		new_file_name => 'ginger_was_perfect.jpg',
-		file_contents => $file_contents
+	my $operation_status = $b2->b2_upload_file(
+		'bucket_name' => 'GingerAnna',
+		'new_file_name' => 'ginger_was_perfect.jpg',
+		'file_contents' => $file_contents
 	);
 	# B2 file ID (fGUID) is now in $response->{fileId}
 	# Best to load $file_contents via Path::Tiny's slurp_raw() method
 
 	# download that file to /opt/majestica/tmp
-	my $response = $b2->b2_download_file_by_name(
-		bucket_name => 'GingerAnna', 
-		file_name => 'ginger_was_perfect.jpg', 
-		save_to_location => '/opt/majestica/tmp'
-	);
+	my $operation_status = $b2->b2_download_file_by_name('GingerAnna','ginger_was_perfect.jpg','/opt/majestica/tmp');
 
 	# if you would rather download with the 84-character GUID
-	my $response = $b2->b2_download_file_by_id(
-		file_id => 'X-Bz-File-Id GUID from above',
-		save_to_location => '/opt/majestica/tmp'
-	);
-	
-	# For all of these $response is the output from the B2 V4 API
-	
-	# to confirm all is well
-	my $all_is_well = $b2->current_status_is_not_ok != 1;
-	
-	# to get the latest error
-	print $b2->latest_error();
-	# if none, will be 'No error message found'
+	my $operation_status = $b2->b2_download_file_by_id('X-Bz-File-Id GUID from above','/opt/majestica/tmp');
+
+	# you can leave off the directory to just have the file contents into
+	# $response->{file_contents}
+
+	# $operation_status is now 'OK' or 'Error', and is
+	# also stashed in $b2->{current_status}
+
+	# check the status of the last operation
+	use Data::Dumper; # hello old friend
+	if ($b2->{current_status} eq 'OK') {
+
+		# all is well -- what did we get?
+		print Dumper($response);
+
+	} elsif ($b2->{current_status} eq 'Error') {
+
+		# what info do we have on this disaster?
+		print Dumper($b2->{errors}[-1]);
+
+	}
 
 =head1 DESCRIPTION / SET UP
 
 This module should help you create buckets and store/retrieve files in the
-Backblaze B2 cloud storage service using V4 of their API.
+Backblaze B2 cloud storage service using V2 of their API.
 
 Backblaze makes it easy to sign up for B2 from here:
 
@@ -842,7 +842,7 @@ when not in use by your software.
 
 =head2 b2_client Command Line Utility
 
-Backblaze::B2V4 includes the 'b2_client' command line utility to
+Backblaze::B2V2Client includes the 'b2_client' command line utility to
 easily download or upload files from B2.  Please execute 'b2_client help'
 for more details, and here are a few examples:
 
@@ -888,26 +888,27 @@ in the 'Browse Files' section of the B2 UI.
 
 =head1 METHODS
 
+For all the below, when they return $operation_status, that will
+be 'OK' or 'Error'.  If you get 'Error,' check out $b2->{errors}[-1] .
+
 =head2 new
 
 Creates the B2 client object and initiates an API session with B2.
 
-Requires two arguments: 
-	application_key => the Application Key from Backblaze,
-	application_key_id => the Application Key ID from Backblze,
-
-Returns your B2 client object.
+Requires two arguments: the Application Key ID and Application Key
+obtained from Backblaze.
 
 =head2 b2_download_file_by_id
 
-Retrieves a file plus metadata given the GUID of that file.  
-The 'file_id' argument is required and will be the file's GUID.  
-If you would like to auto-save the file, provide a path to an 
-existing directory via the 'save_to_location' argument.
+Retrieves a file plus metadata given the GUID of that file.  The first
+argument is required and will be the file's GUID.  If you would like
+to auto-save the file, provide a path to an existing directory as the
+second argument.
 
-On success, will return the $response hashref with these keys:
+Regardless of auto-save, the file's raw contents will be placed in to
+$response->{file_contents} and the following keys
+will be populated under $response:
 
-	file_contents
 	Content-Length
 	Content-Type
 	X-Bz-File-Id
@@ -918,121 +919,169 @@ See https://www.backblaze.com/b2/docs/b2_download_file_by_id.html
 
 =head2 b2_download_file_by_name
 
-Works like b2_download_file_by_id() except that it expects 'bucket_name'
-and 'file_name' named arguments arguments.  
-If you would like to auto-save the file, provide a path to an 
-existing directory via the 'save_to_location' argument.
+Works like b2_download_file_by_id() except that it expects the bucket name
+and file name as arguments.  The optional third argument is an existing
+directory path for auto-saving the file.
 
 See https://www.backblaze.com/b2/docs/b2_download_file_by_name.html
 
 =head2 b2_upload_file
 
-Uploads a new file into B2. Accepts these named arguments:
-
-	bucket_name => required, name of destination bucket,
-	content_type => optional mime type; defaults to b2/x-auto,
-	file_location => optional, full path of file to upload incl name
-	new_file_name => optional, filename for file on B2
-	file_contents => optional scalar with file contents
-
-If you do not provide 'file_location', then you need to provide
-'new_file_name' and 'file_contents' (or vice versa).
-If you are going to use the 'file_contents' method, it's best
-to load the scalar using the 'slurp_raw' method in Path::Tiny.
-(I believe 'read_file' in File::Slurp will work, but have yet to test.)
-
-If successful, returns the GUID for the new file (aka the fileId); otherwise
-returns 0.
-See: https://www.backblaze.com/b2/docs/b2_upload_file.html
+Uploads a new file into B2.  Accepts a hash of arguments.  The name
+of the destination bucket must be provided in 'bucket_name'.
+If you would like to upload a file already saved on disk, specify
+the complete file path in 'file_location'.  Alternatively, if the file
+is loaded up into a scalar, provide the new file name in 'new_file_name'
+and assign the loaded scalar into 'file_contents'.
 
 Example 1: Uploading from a file on disk:
 
-	my $file_id = $b2->b2_upload_file(
+	my $operation_status = $b2->b2_upload_file(
 		'bucket_name' => 'GingerAnna',
 		'file_location' => '/opt/majestica/tmp/ginger_was_perfect.jpg',
 	);
 
 Example 2: Uploading when the file is loaded into a scalar:
 
-	my $file_id = $b2->b2_upload_file(
+	my $operation_status = $b2->b2_upload_file(
 		'bucket_name' => 'GingerAnna',
 		'new_file_name' => 'ginger_was_perfect.jpg',
 		'file_contents' => $file_contents
 	);
 
+NOTE: If you are going to use the 'file_contents' method, it's best
+to load the scalar using the 'slurp_raw' method in Path::Tiny.
+(I believe 'read_file' in File::Slurp will work, but have yet to test.)
+
+You can also pass a 'content-type' key with the MIME type for the new
+file.  The default is 'b2/auto'.
+
+Upon a successful upload, the new GUID for the file will be available
+in $response->{fileId} .
+
+See: https://www.backblaze.com/b2/docs/b2_upload_file.html
+
 =head2 b2_upload_large_file
 
 Uploads a large file into B2.  Recommended for uploading files larger
-than 100MB. 
+than 100MB. Accepts a hash of arguments, which
+must include the name of the destination bucket in 'bucket_name'
+and the complete file path of the file in 'file_location'.
 
 Example:
 
-	my $file_id = $b2->b2_upload_large_file(
+	my $operation_status = $b2->b2_upload_large_file(
 		'bucket_name' => 'GingerAnna',
 		'file_location' => '/opt/majestica/tmp/gingers_whole_life_story.mp4',
 	);
 
 =head2 b2_list_file_names
 
-Retrieves an arrayref of file names for a bucket. Limited to 1,000 names
-per call, so you will may need to call repeatedly to retrieve all names.
+Required input is C<$bucket_name> as the first parameter (required) and
+an optional key-value hash of parameters.  These parameters can include:
 
-Accepts these named arguments
+=over 3
 
-	bucket_name => required, the name of the target bucket,
-	prefix => optional, if seeking files that start with a given string,
-	startFileName => optional, the file name to start listing 1,000 files from
-	maxFileCount => optional integer, default is 1000,
-	delimiter => optional (default '/') used if you have folders within your bucket,
+=item C<prefix>
+
+Allows one to specify a filename prefix or directory path, useful for buckets
+with a large number of files or many subdirectories. Default is undefined.
+
+=item C<delimiter>
+
+Allows one to specify what is considered the delimiter for the file C<path> in
+the bucket. Default is undefined.
+
+=item C<startFileName>
+
+Allows one to select where in the file list to start the results, since the max
+results for each call is 1000 files. This allows one to define the C<start> for
+emulating pagination of the results.
+
+=item C<maxFileCount>
+
+The default is 1000, the ultimate maximum per the specification. The module
+default may be accessed via the package variable, C<$B2_MAX_FILE_COUNT>.
+
+=back
+
+Retrieves an array of file information hashes for a given bucket name.
+That array is added to @{ $b2->{buckets}{$bucket_name}{files} } and
+returned as an array reference to the list of file objects.
 
 See https://www.backblaze.com/b2/docs/b2_list_file_names.html ,
 especially the section for 'Response' to see what is included for those
 file info hashes.
 
-Basic call:
+Note that B2 limits this response to 1000 entries, so if you have a very
+large bucket, you can call this method several times and check the
+value in $b2->{buckets}{$bucket_name}{next_file_name} after each call.
 
-	my $files_ref = $b2->b2_list_file_names(
-		bucket_name => 'MyBucketName'
+Example 1: Basic call:
+
+	my $files_ref = $b2->b2_list_file_names('MyBucketName');
+
+Example 2: Basic call and capturing file list:
+
+	my $files_ref = $b2->b2_list_file_names('MyBucketName');
+
+Example 3: Avoid initial API call to get C<bucket_id>:
+
+	# In order to avoid the initial API call to determine the BucketId, which is
+	# actually what B2 wants, one may set this directly if known ahead of time:
+
+	$b2->{buckets}{q/MyBucketName/}->{bucket_id} = q{b9d516ba733afb62719c4};
+	my $files_ref = $b2->b2_list_file_names('MyBucketName');
+
+Example 4: Using optional parameters to control results (Note: only C<$bucket_name> is required):
+
+	my $bucket_name = q{MyBucketName};
+	my %args = (
+		'prefix' => q{path/to/sub/directory/},
+		'delimter' => undef,
+		'startFileName' => undef,
+		'maxFileCount' => $b2::B2_MAX_FILE_COUNT
 	);
+
+	# $bucket_id look up hack
+	$b2->{buckets}{$bucket_name}->{bucket_id} = q{b9d516ba733afb62719c4};
+
+	# actual call - parameter order matters
+	my $files_ref = $b2->b2_list_file_names($bucket_name, %args);
 
 =head2 b2_get_file_info
 
-Given a GUID for a file, will retrieve its info a $response hash
-See https://www.backblaze.com/b2/docs/b2_get_file_info.html 
+Given a GUID for a file, will retrieve its info hash and load into
+$b2->{file_info}{$file_id}.
 
-	my $response = $b2->b2_get_file_info(
-		file_id => 'AN84_CHAR_GUID_FROM_B2'
-	);
+See https://www.backblaze.com/b2/docs/b2_get_file_info.html ,
+particularly the section for 'Response' to see what is provided.
+
+Example:
+
+	my $operation_status = $b2->b2_get_file_info('AN84_CHAR_GUID_FROM_B2');
 
 =head2 b2_bucket_maker
 
 Creates a new bucket in your B2 account, given the name for the new
-bucket.  The bucket type will be set to 'allPrivate'
+bucket.  The bucket type will be set to 'allPrivate',
 
-Returns 1 (success) or 0 (failure)
+Will place the new bucket's ID into:
 
-Accepts named args:
-
-	bucket_name => required, the name of the new bucket
-	disable_encryption => optional, 1 or 0 and defaults to 0 --> have the encryption
+	my $operation_status = $b2->{buckets}{$bucket_name}{bucket_id}
 
 See: https://www.backblaze.com/b2/docs/b2_create_bucket.html
 
 Example:
 
-	my $success = $b2->b2_bucket_maker(
-		bucket_name => 'NewBucketName'
-	);
+	my $operation_status = $b2->b2_bucket_maker('NewBucketName');
 
 By default the new bucket will be set to use the 'Server-Side 
 Encryption with Backblaze-Managed Keys (SSE-B2)' option 
 described here: https://www.backblaze.com/b2/docs/server_side_encryption.html
 You can send a second param to disable that (not recommended):
 
-	my $success = $b2->b2_bucket_maker(
-		bucket_name => 'UnEncryptedBucketName', 
-		disable_encryption => 1
-	);
+	my $operation_status = $b2->b2_bucket_maker('UnEncryptedBucketName', 1);
 	
 Also, if your app key does not have the 'writeBucketEncryption' then 
 encryption will be disabled.
@@ -1040,18 +1089,13 @@ encryption will be disabled.
 =head2 b2_delete_bucket
 
 Deletes a bucket from your B2 account, provided that it is empty.
-
-Requires the target bucket's name as the 'bucket_name' argument.
-
-Returns 1 (success) or 0 (failure)
+Requires the target bucket's name as the argument.
 
 See: https://www.backblaze.com/b2/docs/b2_delete_bucket.html
 
 Example:
 
-	my $success = $b2->b2_delete_bucket(
-		bucket_name => 'DeletingBucketName'
-	);
+	my $operation_status = $b2->b2_delete_bucket('DeletingBucketName');
 
 =head2 b2_delete_file_version
 
@@ -1060,17 +1104,11 @@ file names for each file you upload, then one version equals one file.
 If you upload multiple files with the same name under a single bucket,
 you will create multiple versions of a particular file in B2.
 
-Required named args
+The required arguments are the file name and the file ID.
 
-	file_name => the name of the file
-	file_id => the Backblaze GUID for the file
+Example:
 
-Returns 1 (success) or 0 (failure)
-
-	my $success = $b2->b2_delete_file_version(
-		file_name => 'SomeFileName.ext',
-		file_id => 'AN84_CHAR_GUID_FROM_B2'
-	);
+	my $operation_status = $b2->b2_delete_file_version('SomeFileName.ext','AN84_CHAR_GUID_FROM_B2');
 
 =head2 send_request / b2_get_upload_info  / b2_list_buckets
 
@@ -1079,27 +1117,31 @@ You should be able to use this to make calls not explicitly
 provided by this library.
 
 If send_request() gets a 200 HTTP status from B2, then the call went
-great, $b2->current_status_is_not_ok will be 0, and 
-the JSON response will be returned.
+great, the JSON response will be loaded into $response,
+and $b2->{current_status} will be set to 'OK'.
 
-If a 200 is not received from B2, $b2->current_status_is_not_ok
-will be 1, and you can find an error in $b2->latest_error()
+If a 200 is not received from B2, $b2->{current_status} will be
+set to 'Error' and a hash error details will be added to
+@{ $b2->{errors} }.  That hash usually includes the
+called URL, the returned status code, and the error message.
 
 Note that the base URL for this API session will be stored
-under $b2->api_info->{api_url} so that you build a URL like so:
+under $b2->{api_url} so that you build a URL like so:
 
-$list_buckets_url = $b2->api_info->{api_url}.'/b2api/v4/b2_list_buckets';
+$list_buckets_url = $b2->{api_url}.'/b2api/v2/b2_list_buckets';
 
 Example of a GET API request:
 
-	my $response = $b2->send_request(
+	my $operation_status = $b2->send_request(
 		'url' => 'https://SomeB2.API.URL?with=GETparams',
+		'authorization' => $b2->{account_authorization_token},
 	);
 
 Example of a POST API request:
 
-	my $response = $b2->send_request(
+	my $operation_status = $b2->send_request(
 		'url' => 'https://SomeB2.API.URL',
+		'authorization' => $b2->{account_authorization_token},
 		'post_params' => {
 			'param1_name' => 'param1_value',
 			'param2_name' => 'param2_value',
@@ -1114,11 +1156,14 @@ with the bucket name as an argument.
 
 Example:
 
-	my $results = $b2->b2_get_upload_info(
-		bucket_name => 'MyBucketName'
-	);
+	my $operation_status = $b2->b2_get_upload_info('MyBucketName');
 
-The %$results hash now has 'upload_url' and 'authorization_token'
+This populates:
+
+	my $operation_status = $b2->{bucket_info}{'MyBucketName'} = {
+		'upload_url' => $response->{uploadUrl},
+		'authorization_token' => $response->{authorizationToken},
+	};
 
 Note: You have to call b2_get_upload_info on a bucket for each file
 upload operation.  My b2_upload_file method does that for you, so that's
@@ -1133,9 +1178,9 @@ account.
 
 Example:
 
-	my $bucket_id = $b2->b2_list_buckets(
-		'bucket_name' => 'MyBucketName'
-	);
+	my $operation_status = $b2->b2_list_buckets('MyBucketName');
+
+You now have $b2->{buckets}{'MyBucketName'}{bucket_id}
 
 See: https://www.backblaze.com/b2/docs/b2_list_buckets.html
 

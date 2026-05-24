@@ -24,7 +24,7 @@ like($b2->api_info->{account_authorization_token}, qr/4\_$application_key_id/, $
 
 # test file download
 my $b2_response = $b2->b2_download_file_by_id(file_id => $test_file_id);
-ok( ref($b2_response) eq 'HASH', 'Test file could not be downloaded; B2 Msg: ' . $b2->latest_error() );
+ok(ref($b2_response) eq 'HASH', 'Test file could not be downloaded; B2 Msg: ' . $b2->latest_error() );
 ok( length($b2_response->{file_contents}) > 15000, 'Test file did not download properly; B2 Msg: ' . $b2->latest_error() );
 
 # that's enough for now
