@@ -1,4 +1,4 @@
-#!perl
+#!/usr/bin/perl
 # script to provide some basic Backblaze B2 functions on the command line
 # more details in print_help() below
 

@@ -410,8 +410,8 @@ sub b2_get_bucket_id ($self, $args) {
 signature_for b2_list_buckets => (
 	method => true,
 	named => [
-		bucket_name => Str, { optional => true, default => '' },
-		auto_create_bucket => Bool, { optional => true, default => false },
+		bucket_name => NonEmptyStr, { optional => true },
+		auto_create_bucket => Bool
 	],
 	returns => Bool,
 );
@@ -420,18 +420,13 @@ sub b2_list_buckets ($self, $args) {
 	# no need if we already have it
 	return 1 if $self->bucket_info->{$args->bucket_name}->{bucket_id};
 
-	my $post_params = {
-		'accountId' => $self->api_info->{account_id}
-	};
-	
-	if ($args->bucket_name) {
-		$post_params->{bucketName} = $args->bucket_name;
-	}
-
 	# send the request
 	my $response = $self->send_request(
 		'url' => 'b2_list_buckets',
-		'post_params' => $post_params,
+		'post_params' => {
+			'accountId' => $self->api_info->{account_id},
+			'bucketName' => $args->bucket_name,
+		},
 	);
 
 	if ($self->current_status_is_not_ok) {
@@ -440,7 +435,6 @@ sub b2_list_buckets ($self, $args) {
 
 	# if we succeeded, load in all the found buckets to $self->{buckets}
 	# that will be a hash of info, keyed by name
-
 	foreach my $bucket_info (@{ $response->{buckets} }) {
 		my $bucket_name = $bucket_info->{bucketName};
 		$self->bucket_info->{$bucket_name} = {
