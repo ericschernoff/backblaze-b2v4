@@ -177,7 +177,15 @@ sub error_tracker ($self, $args) {
 # please tell me the lastest error message
 # for tracking errors into $self->{errrors}[];
 sub latest_error ($self) {
-	return $self->errors->[-1] || 'No error message found';
+	my $latest_error = $self->errors->[-1];
+	if (!$latest_error || !$latest_error->{error_message}) {
+		return 'No error message found';
+	}
+	
+	my $error_message = $latest_error->{error_message};
+		$error_message .= ' / ' . $latest_error->{url} if $latest_error->{url};
+
+	return $error_message;
 }
 
 # method to save downloaded files into a target location
@@ -234,7 +242,7 @@ signature_for b2_download_file_by_id => (
 
 sub b2_download_file_by_id ($self, $args) {
 	my $response = $self->send_request(
-		'url' => $self->api_info->{api_url} . 'b2_download_file_by_id' . '?fileId=' . $args->file_id,
+		'url' => $self->api_info->{download_url} . '/b2api/v4/b2_download_file_by_id' . '?fileId=' . $args->file_id,
 	);
 
 	if ($self->current_status_is_not_ok) {
@@ -267,7 +275,7 @@ signature_for b2_download_file_by_name => (
 sub b2_download_file_by_name ($self, $args) {
 	# send the request, as a GET
 	my $response = $self->send_request(
-		'url' => $self->api_info->{api_url} . '/file/' . uri_escape($args->bucket_name) . '/' . uri_escape($args->file_name),
+		'url' => $self->api_info->{download_url} . '/file/' . uri_escape($args->bucket_name) . '/' . uri_escape($args->file_name),
 	);
 
 	# if the file was found, you will have the relevant headers in $response
@@ -318,14 +326,14 @@ sub b2_upload_file ($self, $args) {
 	if (!$file_contents) {
 		return $self->error_tracker(
 			'error_message' => qq{You must provide either a valid 'file_location' or 'file_contents' arg for b2_upload_file()},
-			'url' => 'save_downloaded_file',
+			'url' => 'b2_upload_file',
 		);
 	}
 
-	if (!$new_file_name || $args->bucket_name) {
+	if (!$new_file_name || !$args->bucket_name) {
 		return $self->error_tracker(
 			'error_message' => qq{You must provide 'bucket_name' and 'new_file_name' args for b2_upload_file().},
-			'url' => 'save_downloaded_file',
+			'url' => 'b2_upload_file',
 		);
 	}
 
@@ -340,11 +348,11 @@ sub b2_upload_file ($self, $args) {
 		'url' => $upload_info->{upload_url},
 		'authorization' => $upload_info->{authorization_token},
 		'file_contents' => $file_contents,
-		'headers' => {
+		'headers' => [
 			'X-Bz-File-Name' => uri_escape( $new_file_name ),
 			'X-Bz-Content-Sha1' => sha1_hex( $file_contents ),
 			'Content-Type' => $content_type,
-		},
+		],
 	);
 	
 	return $self->current_status_is_not_ok ? 0 : $response->{fileId};
@@ -411,7 +419,7 @@ signature_for b2_list_buckets => (
 	method => true,
 	named => [
 		bucket_name => Str, { optional => true, default => '' },
-		auto_create_bucket => Bool, { optional => true, default => false },
+		auto_create_bucket => Bool, { optional => true, default => 0 },
 	],
 	returns => Bool,
 );
@@ -441,8 +449,9 @@ sub b2_list_buckets ($self, $args) {
 	# if we succeeded, load in all the found buckets to $self->{buckets}
 	# that will be a hash of info, keyed by name
 
+	my $bucket_name;
 	foreach my $bucket_info (@{ $response->{buckets} }) {
-		my $bucket_name = $bucket_info->{bucketName};
+		$bucket_name = $bucket_info->{bucketName};
 		$self->bucket_info->{$bucket_name} = {
 			'bucket_id' => $bucket_info->{bucketId},
 			'bucket_type' => $bucket_info->{bucketType},
@@ -450,8 +459,8 @@ sub b2_list_buckets ($self, $args) {
 	}
 
 	# if that bucket was not found, maybe they want to go ahead and create it?
-	my $bucket_name = $args->bucket_name;
-	if ($bucket_name && !$self->bucket_info->{$bucket_name} && $args->auto_create_bucket) {
+	$bucket_name = $args->bucket_name;
+	if ($bucket_name && !$self->bucket_info->{$bucket_name}->{bucket_id} && $args->auto_create_bucket) {
 		$self->b2_bucket_maker(
 			bucket_name => $bucket_name
 		);
@@ -557,7 +566,7 @@ signature_for b2_bucket_maker => (
 sub b2_bucket_maker ($self, $args) {
 	# prepare the basics for our request
 	my $post_params = {
-		'accountId' => $self->{account_id},
+		'accountId' => $self->api_info->{account_id},
 		'bucketName' => $args->bucket_name,
 		'bucketType' => 'allPrivate',
 	};
@@ -734,11 +743,11 @@ sub b2_upload_large_file ($self, $args) {
 		$self->send_request(
 			'url' => $response->{uploadUrl},
 			'authorization' => $response->{authorizationToken},
-			'headers' => {
+			'headers' => [
 				'X-Bz-Content-Sha1' => $sha1_array[-1],
 				'X-Bz-Part-Number' => $part_number,
 				'Content-Length' => $size_sent,
-			},
+			],
 			'file_contents' => $file_contents_part,
 		);
 

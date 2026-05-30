@@ -1,4 +1,4 @@
-[![Actions Status](https://github.com/ericschernoff/backblaze-b2v4/actions/workflows/test.yml/badge.svg?branch=master)](https://github.com/ericschernoff/backblaze-b2v4/actions?workflow=test)
+[![Actions Status](https://github.com/ericschernoff/backblaze-b2v4/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/ericschernoff/backblaze-b2v4/actions?workflow=test)
 # NAME
 
 Backblaze::B2V4 - Client library for the Backblaze B2 Cloud Storage Service V4 API.
