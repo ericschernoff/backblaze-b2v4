@@ -209,17 +209,20 @@ Example:
                 'file_location' => '/opt/majestica/tmp/gingers_whole_life_story.mp4',
         );
 
-## b2\_list\_file\_names
+## b2\_list\_file\_info
 
-Retrieves an arrayref of file names for a bucket. Limited to 1,000 names
-per call, so you will may need to call repeatedly to retrieve all names.
+Retrieves an arrayref hashrefs with file infomrmation for a bucket. 
+Backblaze calls if 'b2\_list\_file\_names' but it really is for file info.
+Limited to 10,000 file results per call, so you will may need to 
+call repeatedly to retrieve all names.  
+
+NOTE: You are billed per 1,000 results returned.
 
 Accepts these named arguments
 
         bucket_name => required, the name of the target bucket,
         prefix => optional, if seeking files that start with a given string,
-        startFileName => optional, the file name to start listing 1,000 files from
-        maxFileCount => optional integer, default is 1000,
+        start_file_name => optional, the file name to start listing 10,000 files from
         delimiter => optional (default '/') used if you have folders within your bucket,
 
 See https://www.backblaze.com/b2/docs/b2\_list\_file\_names.html ,

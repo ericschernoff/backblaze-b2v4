@@ -1,7 +1,7 @@
 {
    "abstract" : "Client library for the Backblaze B2 Cloud Storage Service V4 API.",
    "author" : [
-      "Eric Chernoff"
+      "/ BUGS"
    ],
    "dynamic_config" : 0,
    "generated_by" : "Minilla/v3.1.29, CPAN::Meta::Converter version 2.150010",
@@ -73,6 +73,7 @@
    },
    "version" : "0.01",
    "x_contributors" : [
+      "Eric Chernoff <eric@Mac.lan>",
       "Eric Chernoff <eric@weaverstreet.net>"
    ],
    "x_serialization_backend" : "JSON::PP version 4.16",

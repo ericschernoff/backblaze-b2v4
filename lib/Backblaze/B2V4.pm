@@ -480,10 +480,9 @@ signature_for b2_list_file_names => (
 	method => true,
 	named => [
 		bucket_name => Str,
-		prefix => Str, { optional => true},
-		delimiter => Str, { optional => true},
-		startFileName => Str, { optional => true},
-		maxFileCount => Int, { optional => true, default => 1000},
+		prefix => Str, { optional => true, default => ''},
+		delimiter => Str, { optional => true, default => ''},
+		start_file_name => Str, { optional => true, default => ''},
 	],
 	returns => Bool|ArrayRef,
 );
@@ -491,15 +490,23 @@ signature_for b2_list_file_names => (
 sub b2_list_file_names ($self, $args) {
 	my $bucket_name = $args->bucket_name;
 
+	my $post_params = {
+		'bucketId'      => $self->b2_get_bucket_id( 'bucket_name' => $bucket_name ),
+	};
+	
+	foreach my $key ('prefix', 'delimiter') {
+		if ($args->$key) {
+			$post_params->{$key} = $args->$key;
+		}
+	}
+
+	if ($args->start_file_name) {
+		$post_params->{startFileName} = $args->start_file_name;
+	}
+
 	my $response = $self->send_request(
 		'url' => 'b2_list_file_names',
-		'post_params' => {
-			'bucketId'      => $self->b2_get_bucket_id( 'bucket_name' => $bucket_name ),
-			'prefix'        => $args->prefix // undef,
-			'delimiter'     => $args->delimiter // undef,
-			'startFileName' => $args->startFileName // $self->bucket_info->{$bucket_name}->{next_file_name},
-			'maxFileCount'  => $args->maxFileCount,
-		},
+		'post_params' => $post_params,
 	);
 
 	# if we succeeded, read in the files
@@ -520,12 +527,12 @@ sub b2_list_file_names ($self, $args) {
 }
 
 # method to get info for a specific file
-signature_for b2_list_file_names => (
+signature_for b2_get_file_info => (
 	method => true,
 	named => [
 		file_id => Str,
 	],
-	returns => Bool|ArrayRef,
+	returns => Bool|HashRef,
 );
 
 sub b2_get_file_info ($self, $args) {
@@ -537,10 +544,7 @@ sub b2_get_file_info ($self, $args) {
 
 	# retrieve the file information
 	my $response = $self->send_request(
-		'url' => 'b2_get_file_info',
-		'post_params' => {
-			'fileId' => $file_id,
-		},
+		'url' => 'b2_get_file_info?fileId=' . $file_id,
 	);
 	
 	if ($self->current_status_is_not_ok) {
@@ -986,17 +990,20 @@ Example:
 		'file_location' => '/opt/majestica/tmp/gingers_whole_life_story.mp4',
 	);
 
-=head2 b2_list_file_names
+=head2 b2_list_file_info
 
-Retrieves an arrayref of file names for a bucket. Limited to 1,000 names
-per call, so you will may need to call repeatedly to retrieve all names.
+Retrieves an arrayref hashrefs with file infomrmation for a bucket. 
+Backblaze calls if 'b2_list_file_names' but it really is for file info.
+Limited to 10,000 file results per call, so you will may need to 
+call repeatedly to retrieve all names.  
+
+NOTE: You are billed per 1,000 results returned.
 
 Accepts these named arguments
 
 	bucket_name => required, the name of the target bucket,
 	prefix => optional, if seeking files that start with a given string,
-	startFileName => optional, the file name to start listing 1,000 files from
-	maxFileCount => optional integer, default is 1000,
+	start_file_name => optional, the file name to start listing 10,000 files from
 	delimiter => optional (default '/') used if you have folders within your bucket,
 
 See https://www.backblaze.com/b2/docs/b2_list_file_names.html ,
