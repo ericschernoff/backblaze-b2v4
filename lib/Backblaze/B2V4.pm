@@ -10,8 +10,7 @@ our $VERSION = "0.01";
 use v5.38; # or higher
 use Cpanel::JSON::XS;
 use Digest::SHA qw(sha1_hex);
-use HTTP::Request;
-use LWP::UserAgent;
+use HTTP::Tiny;
 use MIME::Base64;
 use Path::Tiny;
 use URI::Escape;
@@ -33,7 +32,7 @@ use Marlin
 sub build_api_info ($self) {
 	my $response = $self->send_request(
 		url => 'b2_authorize_account',
-		authorization => 'Basic ' . encode_base64($self->application_key_id . ':' . $self->application_key),
+		authorization => 'Basic ' . encode_base64($self->application_key_id . ':' . $self->application_key, ''),
 	);
 
 	if (!$response) {
@@ -56,7 +55,7 @@ signature_for send_request => (
 	named => [
 		url => NonEmptyStr,
 		authorization => Str, { optional => true },
-		headers => ArrayRef, { optional => true },
+		headers => HashRef, { optional => true, default => {} },
 		post_params => HashRef, { optional => true },
 		file_contents => Value, { optional => true },
 	],
@@ -64,14 +63,9 @@ signature_for send_request => (
 );
 
 sub send_request ($self, $args) {
-	my $headers = [];
-	if ($args->headers && $args->headers->[0]) {
-		$headers = $args->headers;
-	}
-	
-	my $authorization_header = $args->authorization || $self->api_info->{account_authorization_token};
-	push(@$headers, 'Authorization' => $authorization_header);
-	
+	my $headers = $args->headers;
+	$headers->{'Authorization'} = $args->authorization || $self->api_info->{account_authorization_token};
+
 	my $api_url = $args->url;
 	if ($args->url eq 'b2_authorize_account') {
 		$api_url = 'https://api.backblazeb2.com/b2api/v4/b2_authorize_account';
@@ -89,62 +83,66 @@ sub send_request ($self, $args) {
 	}
 
 	my $b2_response = {};
-	my $response_code = 200;
+	my $response;
 
 	# are we uploading a file?
 	if ($args->url =~ /b2_upload_file|b2_upload_part/) {
 		# now upload the file
 		eval {
-			my $request = HTTP::Request->new( 'POST', $api_url, $headers, $args->file_contents );
-			my $response = LWP::UserAgent->new()->request($request);
-			$response_code = $response->code;
-			$b2_response = decode_json( $response->content );
+			$response = HTTP::Tiny->new->post($api_url, {
+				'headers' => $headers,
+				'content' => $args->file_contents
+			});
+			$b2_response = decode_json( $response->{content} );
 		};
 
 	# if not uploading and they sent POST params, we are doing a POST
 	} elsif ($args->post_params) {
 		eval {
-			my $request = HTTP::Request->new( 'POST', $api_url, $headers, encode_json($args->post_params) );
-			my $response = LWP::UserAgent->new()->request($request);
-			$response_code = $response->code;
-			$b2_response = decode_json( $response->content );
+			$response = HTTP::Tiny->new->post($api_url, {
+				'headers' => $headers,
+				'content' => encode_json($args->post_params)
+			});
+			$b2_response = decode_json( $response->{content} );
 		};
 
 	# otherwise, we are attempting a GET
 	} else {
 		eval {
-			my $request = HTTP::Request->new( 'GET', $api_url, $headers );
-			my $response = LWP::UserAgent->new()->request($request);
-			$response_code = $response->code;
+			$response = HTTP::Tiny->new->get($api_url, {
+				'headers' => $headers,
+			});
 
 			# did we download a file?
-			if ($response->header( 'X-Bz-File-Name' )) {
+			if ($response->{headers}->{'x-bz-file-name'}) {
 				# grab those needed headers
-				foreach my $header ('Content-Length','Content-Type','X-Bz-File-Id','X-Bz-File-Name','X-Bz-Content-Sha1') {
-					$b2_response->{$header} = $response->header( $header );
+				foreach my $header ('content-length', 'content-type', 'x-bz-file-id', 'x-bz-file-name', 'x-bz-content-sha1') {
+					$b2_response->{$header} = $response->{headers}->{$header};
 				}
 
 				# and the file itself
-				$b2_response->{file_contents} = $response->content;
+				$b2_response->{file_contents} = $response->{content};
 
-			} elsif ($response_code == 200) { # regular JSON, decode results
-				$b2_response = decode_json( $response->content );
+			} elsif ($response->{status} == 200) { # regular JSON, decode results
+				$b2_response = decode_json( $response->{content} );
 			}
 		};
 	}
 	
 	# there is a problem if there is a problem
-	if ($@ || $response_code ne '200') {
+	if ($@ || $response->{status} != 200) {
 		my $error_message;
 		if ($b2_response->{message}) {
 			$error_message = 'API Message: ' . $b2_response->{message};
-		} else {
+		} elsif ($@) {
 			$error_message = 'Error: ' . $@;
+		} else {
+			$error_message = 'Error: ' . $response->{reason};
 		}
 
 		# track the error / set current state
 		return $self->error_tracker(
-			'error_message' => $error_message . ' (' . $response_code . ')',
+			'error_message' => $error_message . ' (' . $response->{status} . ')',
 			'url' => $args->url,
 		);
 	}	
@@ -209,7 +207,7 @@ sub save_downloaded_file ($self, $args) {
 	}
 
 	# make sure they actually downloaded a file
-	if ( !$args->response->{'X-Bz-File-Name'} || !length($args->response->{file_contents}) ) {
+	if ( !$args->response->{'x-bz-file-name'} || !length($args->response->{file_contents}) ) {
 		return $self->error_tracker(
 			'error_message' => "Can not auto-save without first downloading a file.",
 			'url' => 'save_downloaded_file',
@@ -219,7 +217,7 @@ sub save_downloaded_file ($self, $args) {
 	# still here?  do the save
 
 	# add the filename
-	my $save_to_location = $args->save_to_location . '/' . $args->response->{'X-Bz-File-Name'};
+	my $save_to_location = $args->save_to_location . '/' . $args->response->{'x-bz-file-name'};
 
 	# i really love Path::Tiny
 	path($save_to_location)->spew_raw( $args->response->{file_contents} );
@@ -348,11 +346,11 @@ sub b2_upload_file ($self, $args) {
 		'url' => $upload_info->{upload_url},
 		'authorization' => $upload_info->{authorization_token},
 		'file_contents' => $file_contents,
-		'headers' => [
+		'headers' => {
 			'X-Bz-File-Name' => uri_escape( $new_file_name ),
 			'X-Bz-Content-Sha1' => sha1_hex( $file_contents ),
 			'Content-Type' => $content_type,
-		],
+		},
 	);
 	
 	return $self->current_status_is_not_ok ? 0 : $response->{fileId};
@@ -747,11 +745,11 @@ sub b2_upload_large_file ($self, $args) {
 		$self->send_request(
 			'url' => $response->{uploadUrl},
 			'authorization' => $response->{authorizationToken},
-			'headers' => [
+			'headers' => {
 				'X-Bz-Content-Sha1' => $sha1_array[-1],
 				'X-Bz-Part-Number' => $part_number,
 				'Content-Length' => $size_sent,
-			],
+			},
 			'file_contents' => $file_contents_part,
 		);
 
@@ -926,11 +924,11 @@ existing directory via the 'save_to_location' argument.
 On success, will return the $response hashref with these keys:
 
 	file_contents
-	Content-Length
-	Content-Type
-	X-Bz-File-Id
-	X-Bz-File-Name
-	X-Bz-Content-Sha1
+	content-length
+	content-type
+	x-bz-file-id
+	x-bz-file-name
+	x-bz-content-sha1
 
 See https://www.backblaze.com/b2/docs/b2_download_file_by_id.html
 

@@ -145,11 +145,11 @@ existing directory via the 'save\_to\_location' argument.
 On success, will return the $response hashref with these keys:
 
         file_contents
-        Content-Length
-        Content-Type
-        X-Bz-File-Id
-        X-Bz-File-Name
-        X-Bz-Content-Sha1
+        content-length
+        content-type
+        x-bz-file-id
+        x-bz-file-name
+        x-bz-content-sha1
 
 See https://www.backblaze.com/b2/docs/b2\_download\_file\_by\_id.html
 
