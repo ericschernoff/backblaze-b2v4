@@ -258,6 +258,9 @@ Accepts named args:
 
 See: https://www.backblaze.com/b2/docs/b2\_create\_bucket.html
 
+Note that B2 bucket namess must be unique system-wide, not just your account. 
+Select a name that willbe unique globally.
+
 Example:
 
         my $success = $b2->b2_bucket_maker(

@@ -75,7 +75,8 @@
    "version" : "0.01",
    "x_contributors" : [
       "Eric Chernoff <eric@Mac.lan>",
-      "Eric Chernoff <eric@weaverstreet.net>"
+      "Eric Chernoff <eric@weaverstreet.net>",
+      "Eric Chernoff <ericschernoff@gmail.com>"
    ],
    "x_serialization_backend" : "JSON::PP version 4.16",
    "x_static_install" : 1
