@@ -196,6 +196,8 @@ Displays lots of information about a given file.  See https://www.backblaze.com/
 
 Creates a new B2 Bucket with the given name.  Alphanumeric characters only.
 
+Note that B2 bucket namess must be unique system-wide, not just your account. Select a name that willbe unique globally.
+
 # b2_client help
 
 Prints this help screen.

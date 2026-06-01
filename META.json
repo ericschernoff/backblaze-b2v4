@@ -49,7 +49,7 @@
          "requires" : {
             "Cpanel::JSON::XS" : "4.11",
             "Digest::SHA" : "6.02",
-            "HTTP::Tiny" : "0.076",
+            "HTTP::Tiny" : "0.094",
             "IO::Socket::SSL" : "1.56",
             "MIME::Base64" : "3.15",
             "Marlin" : "0.023001",
