@@ -5,7 +5,7 @@ package Backblaze::B2V4;
 use strict;
 use warnings;
 
-our $VERSION = "0.01";
+our $VERSION = "0.02";
 
 use v5.38; # or higher
 use Cpanel::JSON::XS;
